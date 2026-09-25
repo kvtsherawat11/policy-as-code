@@ -47,11 +47,7 @@ jobs:
       # ------------------------------------------------
       - name: Run OPA policy check
         run: |
-          IMAGE_TAG="1.0.0"
-          echo '{\"image_tag\":\"$IMAGE_TAG\"}" > input.json
-          echo "Policy input:"
-          cat input.json
-          
+          echo '{"image_tag":"1.0.0"}' > input.json
           opa eval \
             --fail-defined \
             --input input.json \
@@ -94,7 +90,7 @@ jobs:
           context: ./app
           push: false
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:1.0.0
 
       # ------------------------------------------------
       # 9. Build and push image to GHCR
@@ -105,4 +101,4 @@ jobs:
           context: ./app
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:1.0.0
