@@ -90,7 +90,7 @@ jobs:
           context: ./app
           push: false
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:1.0.0
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
 
       # ------------------------------------------------
       # 9. Build and push image to GHCR
@@ -101,4 +101,4 @@ jobs:
           context: ./app
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:1.0.0
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
