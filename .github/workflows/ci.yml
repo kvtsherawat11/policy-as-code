@@ -47,7 +47,7 @@ jobs:
       # ------------------------------------------------
       - name: Run OPA policy check
         run: |
-          IMAGE_TAG="latest"
+          IMAGE_TAG="1.0.0"
           echo '{\"image_tag\":\"$IMAGE_TAG\"}" > input.json
           echo "Policy input:"
           cat input.json
