@@ -1,0 +1,153 @@
+pipeline {
+    agent { label 'build' }
+
+    environment {
+        REGISTRY = "your-ecr-or-dockerhub-registry"
+        IMAGE_NAME = "your-app-image"
+        IMAGE_TAG = "1.0.${env.BUILD_NUMBER}"
+        AWS_REGION = "us-east-2"
+        META_DIR = "metadata"
+    }
+
+    stages {
+        stage('Checkout Code') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Test Application') {
+            steps {
+                sh '''
+                python3 -m py_compile app/app.py
+                echo "Application syntax check passed."
+                '''
+            }
+        }
+
+        stage('OWASP Dependency Check') {
+            steps {
+                sh '''
+                mkdir -p dependency-check
+                docker run --rm \
+                  -v $(pwd):/src \
+                  -v $(pwd)/dependency-check:/report \
+                  owasp/dependency-check \
+                  --scan /src --format "HTML" --out /report
+                cp dependency-check/dependency-check-report.html $META_DIR/dependency-check-report.html || true
+                '''
+            }
+        }
+
+        stage('SonarQube Analysis') {
+            steps {
+                script {
+                    def scannerHome = tool 'sonar-scanner'
+                    withSonarQubeEnv('SonarQube') {
+                        sh """
+                            ${scannerHome}/bin/sonar-scanner \
+                            -Dsonar.projectKey=your-project-key \
+                            -Dsonar.sources=. \
+                            -Dsonar.host.url=http://<your-sonarqube-host>:9000 \
+                            -Dsonar.login=${SONAR_TOKEN} \
+                            -Dsonar.coverageReportPaths=coverage.xml
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('SonarQube Quality Gate') {
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+
+        stage('Install OPA & Run Policy Checks') {
+            steps {
+                sh '''
+                mkdir -p $META_DIR
+                curl -L -o opa https://openpolicyagent.github.io/opa/releases/latest/opa_linux_amd64
+                chmod +x opa
+                echo '{"image_tag":"${IMAGE_TAG}"}' > input.json
+                ./opa eval --fail-defined \
+                  --input input.json \
+                  --data policies/opa/docker.rego \
+                  'data.docker.deny[_]' > $META_DIR/opa-results.txt
+                '''
+            }
+        }
+
+        stage('Trivy Scan') {
+            steps {
+                sh '''
+                mkdir -p $META_DIR
+                docker run --rm \
+                  -v $(pwd):/src \
+                  -v $(pwd)/$META_DIR:/report \
+                  aquasec/trivy fs /src --severity CRITICAL,HIGH --exit-code 0 --format json --output /report/trivy-results.json
+                '''
+            }
+        }
+
+        stage('Docker Build with Metadata') {
+            steps {
+                sh '''
+                # Copy metadata into image context
+                mkdir -p app/metadata
+                cp -r $META_DIR/* app/metadata/
+
+                docker build -t $REGISTRY/$IMAGE_NAME:$IMAGE_TAG -f Dockerfile ./app
+                '''
+            }
+        }
+
+        stage('Smoke Test Container') {
+            steps {
+                sh '''
+                docker run --rm -d --name smoke-test $REGISTRY/$IMAGE_NAME:$IMAGE_TAG
+                sleep 10
+                docker logs smoke-test
+                docker stop smoke-test
+                '''
+            }
+        }
+
+        stage('Push Image & Metadata to Registry') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'dockerhub-or-ecr-creds', usernameVariable: 'USER', passwordVariable: 'PASS')]) {
+                    sh '''
+                    echo $PASS | docker login -u $USER --password-stdin $REGISTRY
+                    docker push $REGISTRY/$IMAGE_NAME:$IMAGE_TAG
+
+                    # Optionally push metadata as a separate artifact/tag
+                    tar -czf metadata-${IMAGE_TAG}.tar.gz $META_DIR
+                    docker build -t $REGISTRY/$IMAGE_NAME:metadata-${IMAGE_TAG} - <<EOF
+                    FROM scratch
+                    ADD metadata-${IMAGE_TAG}.tar.gz /
+                    EOF
+                    docker push $REGISTRY/$IMAGE_NAME:metadata-${IMAGE_TAG}
+                    '''
+                }
+            }
+        }
+
+        stage('Trigger CD Pipeline') {
+            steps {
+                build job: 'cd-pipeline-job-name', parameters: [
+                    string(name: 'IMAGE_TAG', value: IMAGE_TAG),
+                    string(name: 'REGISTRY', value: REGISTRY),
+                    string(name: 'AWS_REGION', value: AWS_REGION)
+                ]
+            }
+        }
+    }
+
+    post {
+        always {
+            archiveArtifacts artifacts: 'metadata/*', fingerprint: true
+        }
+    }
+}
